@@ -1,0 +1,1113 @@
+---
+title: "30 day map challenge"
+output: html_notebook
+---
+
+Themes https://github.com/tjukanovt/30DayMapChallenge 
+
+```{r}
+library(tidyverse)
+library(rnaturalearth)
+library(extrafont)
+library(sf)
+library(basemapR)
+library(raster)
+library(patchwork)
+library(RColorBrewer)
+library(ggtext)
+library(rayshader)
+
+```
+
+# Day 1 - Points
+
+Saint Petersburg subway 
+proportionate symbols
+
+```{r day 1}
+stations<-st_read("data\\subway.gpkg") %>% 
+  mutate(line=as.factor(line))
+
+ggplot()+
+  base_map(st_bbox(stations), increase_zoom = 2,basemap = "positron", nolabels = TRUE) +
+  scale_size(range = c(2,20)) +
+  geom_sf(data=stations,aes(colour=line,size=pass18))+
+  scale_colour_manual(values = c("#505362","#f9061b","#0f388a","#328217","#f9d51f","#624dcb"),
+                    guide="none")+
+  ggtitle(label = "Saint Petersburg subway",
+          subtitle = "Symbols proportional to passenger traffic (2018)")+
+  labs(caption = "data © OpenStreetMap contributors, http://www.kommet.ru/stats")+
+  theme_void()+
+  theme(legend.position = "none",
+        plot.title = element_text(hjust = 0.5,size = 32),
+        text = element_text(size = 22))+
+  ggsave((paste0("day 1",".png")), 
+       device = "png",dpi = 300, width = 9, height = 18)
+```
+
+# Day 2 - Lines
+
+```{r day 2}
+library(stringi)
+options(stringsAsFactors = FALSE)
+
+allroads <- st_read("data\\highway-line.geojson")
+
+#-----derive road suffixes-----
+#run this line if your suffixes are at the END of the name (e.g. Canal Street)
+allroads$TYPE <- substr(allroads$NAME, stri_locate_last(allroads$NAME, regex = " ")[, 1] + 1,  
+                        nchar(allroads$NAME)) %>% stri_trans_general(id = "Title")
+
+#run this line if your "suffixes" are at the BEGINNING of the name (e.g. Calle de los Gatos)
+allroads$TYPE2 <- substr(allroads$NAME, 1,  str_locate(allroads$NAME, " ")[, 1] -1)  %>% 
+  stri_trans_general(id = "Title") 
+
+allroads_type<- allroads%>% filter(
+  TYPE %in% c("Улица","Бульвар", "Линия","Дорога","Переулок","Набережная",
+              "Шоссе","Проспект","Мост","Проезд","Площадь","Аллея", 
+              "Путепровод","Проток"))%>%
+  select(-TYPE2)
+
+allroads_type2<- allroads %>% filter(
+  TYPE2 %in% c("Улица","Бульвар", "Линия","Дорога","Переулок","Набережная",
+               "Шоссе","Проспект","Мост","Проезд","Площадь","Аллея",
+               "Путепровод","Проток")) %>%
+  mutate(TYPE=if_else(TYPE2!=TYPE,TYPE2,TYPE)) %>%
+  select(-TYPE2)
+
+allroads_type3<- allroads %>% filter(TYPE2 %in% c("Большой","Средний","Малый")) %>%
+  filter(TYPE %in% c("В.о.","П.с.")) %>%
+  mutate(TYPE="Проспект")%>%
+  select(-TYPE2)
+
+allroads_type4<- allroads %>% filter(TYPE %in% "В.о.") %>%
+  filter(TYPE2 !="Большой" & TYPE2 !="Средний" & TYPE2 !="Малый") %>%
+  mutate(TYPE="Линия") %>%
+  select(-TYPE2)
+
+streets<-rbind(allroads_type,allroads_type2,allroads_type3,allroads_type4)
+
+#-----------set up the road types you want to plot and what colors they should be
+plottypes <-  c("Улица", "Бульвар","Линия","Дорога","Переулок","Набережная",
+                "Шоссе","Проспект","Мост","Проезд","Площадь","Аллея", 
+                "Путепровод","Проток")
+plotcolors <-  c("Улица" = '#c4cbd4',"Бульвар"="#29a385", "Линия" = '#f4c025', 
+                 "Дорога" ='#8ba1c1', "Переулок" = '#ec8013', "Набережная" = '#63e9e9',
+                 "Шоссе" = '#394c60', "Проспект" = '#624dcb', "Мост" = '#0f49bd', 
+                 "Проезд" = "#d2798f", "Площадь" = '#981b30',"Аллея"='#889933',
+                 "Путепровод"="#a35229","Проток"="#57afdb")
+
+ggplot() + 
+  geom_sf(data=streets, size = 1, aes(color=TYPE)) + 
+  scale_color_manual(values = plotcolors,name=NULL,guide = "colourbar") +
+  ggtitle(label = "Saint Petersburg streets")+
+  labs(caption = "data OpenStreetMap")+
+  guides(color = guide_legend(title.position = "top", 
+                                title.hjust = 0.5, ncol = 1,
+                                label.position = "right",
+                                override.aes = list(size = 4)))+
+  theme_void()+
+  theme(plot.title = element_text(hjust = 0.5,size = 60, family = "ItalicT",face = "bold"),
+        text = element_text(size = 40, family = "ItalicT"))+
+  ggsave((paste0("day 2",".png")), 
+       device = "png",dpi = 300, width = 18, height = 18)
+
+```
+
+# Day 3 - Polygons
+
+Made animation with QGIS Temporal controller
+
+# Day 4 - Hexagons
+
+```{r day 4}
+library(geogrid)
+library(ggdark)
+library(ggblur)
+
+regions<-st_read("data\\russia regions.shp") %>% 
+  st_transform(crs = "+proj=aea +lat_1=50 +lat_2=70 +lat_0=56 +lon_0=100 +x_0=0 +y_0=0 +ellps=WGS84 +datum=WGS84 +units=m +no_defs") %>% 
+    group_by(name_en) %>%
+    summarise(geometry = sf::st_union(geometry)) %>%
+    ungroup()  
+
+par(mfrow = c(2, 3), mar = c(0, 0, 2, 0))
+for (i in 1:6) {
+  #функция преобразования полигонов в шестиугольники
+  new_cells <- calculate_grid(shape = regions, grid_type = "hexagonal", seed = i)
+  plot(new_cells, main = paste("Seed", i, sep = " "))
+}
+
+russia_hex <- calculate_grid(shape = regions, grid_type = "hexagonal", seed = 5) 
+russia_hex<- st_as_sf(russia_hex[[2]]) 
+centroids<-st_centroid(russia_hex)
+centroids<-centroids %>% 
+  mutate(long=st_coordinates(centroids)[,1],
+         lat=st_coordinates(centroids)[,2])
+
+ggplot()+
+  geom_sf(data=russia_hex, fill="#f9bc06",colour="#f6ce55", lwd=3)+
+  geom_point_blur(data=centroids,aes(x=long,y=lat,blur_size=1000), 
+                      alpha =0.8, size=20, colour="#e09706") +
+  ggtitle(label = "Russia as hexmap")+
+  dark_theme_void()+
+  theme(plot.title = element_text(hjust = 0.5,vjust=0.3,size = 50, 
+                                  family = "SansSerif",
+                                  colour = "#e09706"),
+        legend.position = "none") +
+  ggsave((paste0("day 4",".png")), 
+       device = "png",dpi = 300, width = 18, height = 12)
+
+```
+
+
+# Day 5 - Blue
+
+```{r}
+bathymetry<-raster("data\\Blue-Earth-Bathymetry.tif")
+contour<-rasterToContour(bathymetry) %>% 
+  st_as_sf() %>% 
+  filter(level<=0) 
+
+ggplot()+
+  geom_sf(data=contour,aes(colour=level),lwd=1)+
+  scale_color_manual(values = c("#0a1843","#75aed7","#428cd7","#1763cf","#0f388a","white"))+
+  theme_void()+
+  ggtitle(label = "Blue earth")+
+  labs(caption = "Source: Blue Earth bathymetry data by Tom Patterson")+
+  theme(plot.title = element_text(hjust = 0.5,vjust=0.3,size = 50, 
+                                  family = "ItalicC",
+                                  colour = "#0f388a"),
+        text = element_text(size = 20, family = "ItalicC",colour = "#0f388a"),
+        legend.position = "none",plot.margin = margin(1, 0, 0,0, "cm"),
+        plot.background = element_rect(color = NA, fill = "#c2d9f0")) +
+  ggsave((paste0("day 5",".png")), 
+       device = "png",dpi = 300, width = 18, height = 10)
+
+```
+
+
+# Day 6 - Red
+
+```{r}
+library(stringr)
+library(ggblur)
+library(ggdark)
+
+memorials<-st_read("data\\memorials.gpkg") 
+lenin<-memorials[str_detect(memorials$name, "Ленин"), ]
+lenin<-lenin %>% 
+  mutate(long=st_coordinates(lenin)[,1],
+         lat=st_coordinates(lenin)[,2])
+
+ggplot()+
+  base_map(bbox=st_bbox(lenin),basemap = "dark", increase_zoom = 2, nolabels = TRUE) +
+  geom_point_blur(data=lenin,aes(x=long,y=lat,blur_size=30), 
+                      alpha =0.8, size=1, colour="#91081f") +
+  dark_theme_void()+
+  ggtitle(label = "Lenin memorials")+
+  labs(caption = "data OpenStreetMap")+
+  theme(plot.title = element_text(hjust = 0.5,vjust=0.1,size = 50, 
+                                  family = "Bahnschrift",
+                                  colour = "#91081f"),
+        text = element_text(size = 25, family = "Bahnschrift",colour = "#91081f"),
+        legend.position = "none",plot.margin = margin(1, 0, 0,0, "cm"))+ 
+  ggsave((paste0("day 6",".png")), 
+       device = "png",dpi = 500, width = 10, height = 10)
+
+
+```
+
+
+# Day 7 - Green
+
+```{r day 7}
+parks<-st_read("data\\parks.gpkg")
+buildings<-st_read("data\\buildings_v13.gpkg")
+
+ggplot()+
+  geom_sf(data=buildings,fill="black",colour=NA)+
+  geom_sf(data=parks,fill="#328217",lwd=0,colour=NA)+
+  theme_void()+
+  ggtitle(label = "Parks of Saint Petersburg")+
+  labs(caption = "data OpenStreetMap")+
+  theme(plot.title = element_text(hjust = 0.5,vjust=0.1,size = 30, 
+                                  family = "Caviar Dreams",
+                                  colour = "#328217"),
+        text = element_text(size = 15, family = "Caviar Dreams",colour = "#328217"),
+        legend.position = "none",plot.margin = margin(1, 0, 0,0, "cm"))+
+  ggsave((paste0("day 7",".png")), 
+       device = "png",dpi = 500, width = 10, height = 10)
+
+```
+
+# Day 8 - Yellow
+
+```{r}
+allroads <- st_read("data\\highway-line.geojson")
+places<-st_read("data\\places.gpkg")
+
+lat <- 59.924948 #center point latitude
+long <- 30.310923 #center point longitude
+rad <- 500 #radius, in meters, around the center point to map
+pt <- data.frame(lat = lat, long = long)
+pt <- pt %>% st_as_sf(coords = c("long", "lat"), crs = 4326) %>%  st_transform(crs=32636) 
+circle <- st_buffer(pt, dist = rad)
+circle <- circle %>% st_transform(st_crs(allroads))
+allroads <- st_intersection(circle, allroads)
+buildings_cut<-buildings %>% st_transform(st_crs(allroads))
+buildings_cut<-st_intersection(circle, buildings_cut)
+
+ggplot()+
+  geom_sf(data=circle, fill="white",colour=NA)+
+  geom_sf(data=allroads,colour="#f9d51f",lwd=0.6)+
+  geom_sf(data = buildings_cut,fill="#f7e8ba", colour=NA)+
+  geom_sf(data=places, size=3, colour="#e6a219")+
+  geom_sf_text(data=places,aes(label = place_en),
+                nudge_y = 0.0002,colour="#e09706",family = "BigNoodleTitling")+
+  theme_void()+
+  ggtitle(label = "St. Petersburg of Dostoevsky")+
+  theme(plot.title = element_text(hjust = 0.5,vjust=0.1,size = 30, 
+                                  family = "BigNoodleTitling",
+                                  colour = "#e6a219"),
+        legend.position = "none",plot.margin = margin(1, 0, 0,0, "cm"),
+        plot.background = element_rect(color = NA, fill = "#eee3c4")) +
+  ggsave((paste0("day 8",".png")), 
+       device = "png",dpi = 500, width = 10, height = 10)
+
+
+```
+
+
+# Day 9 - Monochrome
+
+```{r}
+sidewalks <- st_read("data\\sidewalks.gpkg") 
+
+lat <- 59.938950 #center point latitude
+long <- 30.315701 #center point longitude
+rad <- 5000 #radius, in meters, around the center point to map
+pt <- data.frame(lat = lat, long = long)
+pt <- pt %>% st_as_sf(coords = c("long", "lat"), crs = 4326) %>%  st_transform(crs=32636) 
+circle <- st_buffer(pt, dist = rad)
+circle <- circle %>% st_transform(st_crs(sidewalks))
+sidewalks <- st_intersection(circle, sidewalks)
+
+ggplot()+
+  geom_sf(data=circle, fill="#bdcfdb",colour=NA)+
+  geom_sf(data=sidewalks,colour="black",lwd=0.6)+
+  theme_void()+
+  ggtitle(label = "St. Petersburg sidewalks")+
+  labs(caption = "data OpenStreetMap")+
+  theme(plot.title = element_text(hjust = 0.5,vjust=0.1,size = 30, 
+                                  family = "Ostrich Sans",
+                                  colour = "black"),
+        text = element_text(hjust = 0.8,vjust=0.9,size = 20, 
+                            family = "Ostrich Sans",colour = "black"),
+        legend.position = "none",plot.margin = margin(1, 0, 0,0, "cm"),
+        plot.background = element_rect(color = NA, fill = "#7b929d")) +
+  ggsave((paste0("day 9",".png")), 
+       device = "png",dpi = 500, width = 10, height = 10)
+
+```
+
+
+# Day 10 - Grid
+
+```{r}
+mo<-st_read("data\\mo.shp",quiet=TRUE) %>%
+  st_transform(crs=32636)
+mo<- mo %>% 
+  mutate(area=st_area(mo)/1000000) %>% #расчет площади и перевод в квадратные километры
+  mutate(dens=as.numeric(population/area)) #плотность населения
+
+#готовится сетка 
+grid<-st_make_grid(mo,cellsize = c(1000,1000),what = "polygons",square = TRUE)
+
+mo_population<-st_interpolate_aw(mo["dens"],grid,extensive=FALSE)
+
+equal.interval <- seq(min(mo_population$dens), 
+                     max(mo_population$dens), 
+                     by = (max(mo_population$dens)-min(mo_population$dens))/5)
+labels <- c() 
+for(idx in 1:length(equal.interval)){
+  labels <- c(labels, paste0(round(equal.interval[idx], 0), 
+                             " – ", 
+                             round(equal.interval[idx + 1], 0)))}
+#удаление последнего элемента 
+#потому что он будет подобным "66.62 - NA"
+labels <- labels[1:length(labels)-1]
+mo_population$equal <- cut(mo_population$dens, breaks=equal.interval, 
+                     labels=labels,include.lowest = TRUE)
+
+
+mo_population %>% 
+  ggplot()+
+  geom_sf(aes(fill=equal))+
+  scale_fill_brewer(palette = "BuPu",aesthetics = "fill",
+                    guide = guide_legend(
+                       keyheight = unit(5, units = "mm"),
+                       title.position = 'top',
+                       reverse = T),name="Population density, per sq km")+
+  theme_void()+
+  ggtitle(label = "St. Petersburg population density")+
+  theme(plot.title = element_text(hjust = 0.5,vjust=0.1,size = 30, 
+                                  family = "Ostrich Sans",
+                                  colour = "black"),
+        text = element_text(hjust = 0.8,vjust=0.9,size = 10, 
+                            family = "Ostrich Sans",colour = "black"),
+        legend.position = "bottom",plot.margin = margin(1, 0, 0,0, "cm"),
+        plot.background = element_rect(color = NA, fill = "#bfced9")) +
+  ggsave((paste0("day 10",".png")), 
+       device = "png",dpi = 500, width = 10, height = 10)
+
+```
+
+
+# Day 11 - 3D
+
+Balaton rayshader
+
+
+# Day 12 - Map not made with GIS software
+
+Карта с топографического черчения
+
+# Day 13 - Raster
+
+```{r}
+stops<-st_read("data\\stops.shp",quiet=TRUE) 
+stops<- stops %>%
+  mutate(lon=st_coordinates(stops)[,1])%>%
+  mutate(lat=st_coordinates(stops)[,2])
+
+mo<-st_read("data\\mo.shp",quiet=TRUE)
+
+ggplot()+
+  stat_density2d(data=stops,mapping=aes(x=`lon`,y=`lat`,fill=..level..), 
+                 geom="polygon")+
+  scale_fill_gradientn(colours=brewer.pal(7, "BuPu"),name=NULL,
+                       guide = guide_legend(keywidth=1,keyheight=1))+
+  geom_sf(data=mo, colour = "black", fill = NA)+
+  theme_void()+
+  ggtitle(label = "Public transport stops density in St. Petersburg")+
+  theme(plot.title = element_text(hjust = 0.5,size = 25, 
+                                  family = "BigNoodleTitling",
+                                  colour = "black"),
+        text = element_text(size = 24))+
+  ggsave((paste0("day 13",
+               ".png")), device = "png",dpi = 500, width = 10, height = 12)
+```
+
+
+# Day 14 - Climate change
+
+Slightly modified version of Tyler Morgan-Wall blog post [How to: Download and Animate Polar Ice Data in R with Rayrender](https://www.tylermw.com/polar-ice-data-in-r-with-rayrender/)
+
+```{r}
+require(RCurl)
+
+ice_dates = c("01_Jan", "02_Feb", "03_Mar", "04_Apr", "05_May", "06_Jun",
+  "07_Jul", "08_Aug", "09_Sep", "10_Oct", "11_Nov", "12_Dec")
+
+#Arctic
+sea_url = "ftp://sidads.colorado.edu/DATASETS/NOAA/G02135/north/monthly/shapefiles/shp_extent/"
+
+#Load all years of data, for each month
+for(i in 1:12) {
+  sea_url_single = glue::glue("{sea_url}{ice_dates[i]}/")
+  filenames = getURL(sea_url_single, ftp.use.epsv = FALSE, dirlistonly = TRUE)
+  filenames = strsplit(filenames, "\n")
+  filenames = unlist(filenames)
+  filenames = strsplit(filenames, "\r")
+  filenames = unlist(filenames)
+  filenames = filenames[!filenames %in% c(".","..")]
+  for (filename in filenames) {
+    download.file(url=paste0(sea_url_single, filename), 
+                  destfile=paste0(getwd(), "/", filename))
+  }
+}
+```
+
+
+```{r}
+library(maptools)
+library(anglr) 
+library(silicate)
+library(quadmesh)
+library(rgl)
+library(rayrender)
+
+
+generate_sea_obj = function(yearval, mon_val) {
+  temp_ice_dir = "D:/30 days map challenge/data"
+  #North
+  temp_address = sprintf("%s/extent_N_%d%02d_polygon_v3.0.shp",temp_ice_dir,yearval,mon_val)
+  ice_layer  =sf::st_read(temp_address) 
+  ice_layer_mesh  =sf::st_read(temp_address) %>% 
+    DEL(max_area = 500000000) %>% 
+    as.mesh3d(smooth=TRUE, color="red") 
+  ice_layer_mesh$vb[1:3,] = t(llh2xyz(
+    reproj::reproj(t(ice_layer_mesh$vb[1:3,]),
+                   source = st_crs(ice_layer), 
+                   target="+proj=longlat +datum=WGS84")))
+  plot3d(ice_layer_mesh,box=FALSE,axes=FALSE)
+  Sys.sleep(0.2)
+  
+  rgl::aspect3d("iso")
+  Sys.sleep(0.2)
+  
+  rgl::writeOBJ("arctic.obj")
+  Sys.sleep(0.2)
+  
+  rgl::rgl.clear()
+}
+
+
+yearvals = 1982:2020
+mon_vals = 1:12
+
+for(yearval in yearvals) {
+  for(mon_val in mon_vals) {
+    if(yearval == 1988 && mon_val == 1) {
+      next
+    }
+    if(mon_val > 1) {
+      next
+    }
+    if(yearval == 1982 && mon_val == 1) {
+      next
+    }
+    generate_sea_obj(yearval,mon_val)
+    generate_studio() %>% 
+      add_object(sphere(x=0,radius=1,angle=c(-90,0,0),material = glossy(gloss=0.2,
+        image_texture = "earth.png"))) %>%
+      add_object(obj_model(x=0,"arctic.obj", z=0.0001,scale_obj = 1/6378100 , 
+                           material=glossy(),angle=c(0,0,0))) %>%
+      add_object(sphere(y=5,z=5,radius=2,material=light(intensity =10))) %>% 
+      render_scene(width=800,height=800,aperture=0, fov=25,sample_method = "stratified", 
+                   samples=50, clamp_value=10, lookfrom=c(0,1,10), 
+                   filename=glue::glue("seaice_{yearval}_{mon_val}.png"))
+  }
+}
+```
+
+# Day 15 - Connections
+
+```{r}
+airports<-read.delim("https://raw.githubusercontent.com/jpatokal/openflights/master/data/airports.dat",
+                     header = FALSE, sep = ",") %>% 
+  rename(lat=V7, lon=V8) %>% 
+  filter(V4=="Russia") 
+
+routes<-read.delim("https://raw.githubusercontent.com/jpatokal/openflights/master/data/routes.dat",
+                     header = FALSE, sep = ",") %>% 
+  rename(orig=V3, dest=V5) %>% 
+  filter(orig=="LED") 
+
+flights<-left_join(routes,airports, by=c("orig"="V5"))
+flights<-left_join(flights,airports, by=c("dest"="V5")) %>% 
+  dplyr::select(orig, dest, lat.x, lon.x, lat.y, lon.y) %>% 
+  drop_na(lat.y, lon.y) 
+
+airports<-airports %>% 
+  st_as_sf(coords=c("lon", "lat"), crs=4326) %>% 
+  st_transform(crs = "+proj=aea +lat_1=50 +lat_2=70 +lat_0=56 +lon_0=100 +x_0=0 +y_0=0 +ellps=WGS84 +datum=WGS84 +units=m +no_defs") 
+
+og<-airports %>% filter(V5=="LED")
+
+flights<- flights %>% 
+  st_as_sf(coords=c("lon.y", "lat.y"), crs=4326) %>% 
+  st_transform(crs = "+proj=aea +lat_1=50 +lat_2=70 +lat_0=56 +lon_0=100 +x_0=0 +y_0=0 +ellps=WGS84 +datum=WGS84 +units=m +no_defs") 
+
+flights<- flights%>% 
+  mutate(X=st_coordinates(og)[,1],
+         Y=st_coordinates(og)[,2],
+         Xend=st_coordinates(flights)[,1],
+         Yend=st_coordinates(flights)[,2])
+
+regions<-st_read("data\\russia regions.shp") %>% 
+  st_transform(crs = "+proj=aea +lat_1=50 +lat_2=70 +lat_0=56 +lon_0=100 +x_0=0 +y_0=0 +ellps=WGS84 +datum=WGS84 +units=m +no_defs") %>% 
+  st_union() %>% st_as_sf()
+
+ggplot()+
+  geom_sf(data=regions, color="black", fill="#e0e4eb")+
+  geom_sf(data=airports, color="#088691", size=2)+
+  geom_curve(data = flights, aes(x=X,y=Y,xend=Xend, yend=Yend),
+             color="#2020df", curvature = -0.7,lwd=0.5,
+             arrow = arrow(length = unit(0.02, "npc")))+
+  geom_sf(data=og, color="#043dae", size=4)+
+  xlim(-4316000,3500000)+ylim(-801875,3499296)+
+  theme_void()+
+  ggtitle(label = "Flights from St. Petersburg")+
+  labs(caption = "data: openflights.org")+
+  theme(plot.title = element_text(hjust = 0.5,size = 30, 
+                                  family = "Ostrich Sans",
+                                  colour = "black"),
+        text = element_text(size = 15, 
+                                  family = "Ostrich Sans",
+                                  colour = "black"))+
+  ggsave((paste0("day 15",
+               ".png")), device = "png",dpi = 500, width = 10, height = 8)
+```
+
+# Day 16 - Island(s)
+
+```{r}
+islands<-st_read("data\\islands.gpkg")
+
+bay<-st_read("data\\water.shp",quiet=TRUE) %>% 
+  st_transform(32636)%>% 
+  st_union() %>% st_as_sf()
+
+rivers<-st_read("data\\rivers.gpkg",quiet=TRUE) 
+
+ggplot()+
+  geom_sf(data=bay, fill="#316081", color=NA)+
+  geom_sf(data=islands, fill="#f2bf5a", color="#316081")+
+  geom_sf(data=rivers, fill="#316081", color=NA)+
+  xlim(312486.1,354805.8)+ylim(6641712.2,6659925.8)+
+  theme_void()+
+  ggtitle(label = "You are on an island")+
+  theme(plot.title = element_text(hjust = 0.5,vjust=0.1,size = 30, 
+                                  family = "Walkway",face = "bold",
+                                  colour = "#f2bf5a"),
+        plot.background = element_rect(color = NA, fill = "#316081")) +
+  ggsave((paste0("day 16",".png")), 
+       device = "png",dpi = 500, width = 11.5, height = 5.5)
+```
+
+# Day 17 - Historical map
+
+Witch trials data from [Leeson, P.T. and Russ, J.W. (2018), Witch Trials. Econ J, 128: 2066-2105] (https://doi.org/10.1111/ecoj.12498) 
+
+```{r}
+trials<-readr::read_csv("https://raw.githubusercontent.com/JakeRuss/witch-trials/master/data/trials.csv") %>% 
+  drop_na(lon, lat) %>% 
+  st_as_sf(coords=c("lon", "lat"),crs=4326) %>% 
+  st_transform("+proj=aea +lat_1=43 +lat_2=62 +lat_0=30 +lon_0=10 +x_0=0 +y_0=0 +ellps=intl +units=m +no_defs") 
+
+trials<-trials %>% 
+  mutate(X=st_coordinates(trials)[,1],Y=st_coordinates(trials)[,2]) %>% 
+  mutate(color=case_when(
+    century==1300 ~ "#f5c73d",
+    century==1400 ~ "#d94426",
+    century==1500 ~ "#c20a0a",
+    century==1600 ~ "#f5b83d",
+    century==1700 ~ "#f91f44",
+    century==1800 ~ "#f9e71f"
+  ))
+
+countries<-ne_countries(type="countries", scale="medium",returnclass = "sf") %>% 
+   st_transform("+proj=aea +lat_1=43 +lat_2=62 +lat_0=30 +lon_0=10 +x_0=0 +y_0=0 +ellps=intl +units=m +no_defs")
+
+trials %>% 
+  ggplot()+
+  geom_sf(data=countries, fill="black")+
+  geom_sf(data=trials, color="#c70525")+
+  xlim(-1056224.6,627565.9)+ylim(1270210.7,2794200.2)+
+  ggtitle(label = "European witch trials")+
+  labs(caption = "data: Leeson, P.T. and Russ, J.W. (2018), Witch Trials. Econ J, 128: 2066-2105. https://doi.org/10.1111/ecoj.12498")+
+  facet_wrap(facets = vars(century),nrow = 2,ncol = 3)+
+  theme_void()+
+  theme(plot.title = element_text(hjust = 0.5,vjust=0.1,size = 30, 
+                                  family = "GothicE",
+                                  colour = "#c70525"),
+        text = element_text(hjust = 0.5,vjust=0.8,size = 10, 
+                            family = "GothicE",colour = "black"),
+        plot.background = element_rect(color = NA, fill = "#8fa2bc"))+
+ggsave((paste0("day 17",".png")), 
+       device = "png",dpi = 500, width = 12, height = 8)
+```
+
+
+# Day 18 - Land use
+
+
+
+```{r}
+regions<-st_read("data\\russia regions.shp") %>% 
+  st_transform(crs = "+proj=aea +lat_1=50 +lat_2=70 +lat_0=56 +lon_0=100 +x_0=0 +y_0=0 +ellps=WGS84 +datum=WGS84 +units=m +no_defs") %>% 
+  st_union() %>% st_as_sf()
+
+russia_geom<-st_geometry(regions) %>% st_cast("POLYGON") %>% st_union()
+
+centroid<-st_centroid(russia_geom)
+
+forest<-(russia_geom - centroid) * 0.658 + centroid 
+forest<-forest %>% st_as_sf() %>%
+  st_set_crs("+proj=aea +lat_1=50 +lat_2=70 +lat_0=56 +lon_0=100 +x_0=0 +y_0=0 +ellps=WGS84 +datum=WGS84 +units=m +no_defs")
+
+agriculture<-(russia_geom - centroid) * 0.223 + centroid
+agriculture<-agriculture %>% st_as_sf() %>% 
+  st_set_crs("+proj=aea +lat_1=50 +lat_2=70 +lat_0=56 +lon_0=100 +x_0=0 +y_0=0 +ellps=WGS84 +datum=WGS84 +units=m +no_defs")
+
+reserve<-(russia_geom - centroid) * 0.052 + centroid
+reserve<-reserve %>% st_as_sf() %>% 
+  st_set_crs("+proj=aea +lat_1=50 +lat_2=70 +lat_0=56 +lon_0=100 +x_0=0 +y_0=0 +ellps=WGS84 +datum=WGS84 +units=m +no_defs")
+
+nature<-(russia_geom - centroid) * 0.029 + centroid
+nature<-nature %>% st_as_sf() %>% 
+  st_set_crs("+proj=aea +lat_1=50 +lat_2=70 +lat_0=56 +lon_0=100 +x_0=0 +y_0=0 +ellps=WGS84 +datum=WGS84 +units=m +no_defs")
+
+water<-(russia_geom - centroid) * 0.016 + centroid
+water<-water%>% st_as_sf() %>% 
+  st_set_crs("+proj=aea +lat_1=50 +lat_2=70 +lat_0=56 +lon_0=100 +x_0=0 +y_0=0 +ellps=WGS84 +datum=WGS84 +units=m +no_defs")
+
+towns<-(russia_geom - centroid) * 0.012 + centroid
+towns<-towns %>% st_as_sf() %>% 
+  st_set_crs("+proj=aea +lat_1=50 +lat_2=70 +lat_0=56 +lon_0=100 +x_0=0 +y_0=0 +ellps=WGS84 +datum=WGS84 +units=m +no_defs")
+
+industry<-(russia_geom - centroid) * 0.01 + centroid
+industry<-industry%>% st_as_sf() %>% 
+  st_set_crs("+proj=aea +lat_1=50 +lat_2=70 +lat_0=56 +lon_0=100 +x_0=0 +y_0=0 +ellps=WGS84 +datum=WGS84 +units=m +no_defs")
+
+ggplot()+
+  geom_sf(data=regions, fill="grey72", color=NA)+
+  geom_sf(data=forest, fill="#328217", color=NA)+
+  geom_sf(data=agriculture,fill="#75aed7", color=NA)+
+  geom_sf(data = reserve, fill="#5e3894", color=NA)+
+  geom_sf(data=nature, fill="#f9bc06", color=NA)+
+  geom_sf(data=water, fill="#0d66a5", color=NA)+
+  geom_sf(data=towns, fill="#e23645", color=NA)+
+  geom_sf(data = industry, fill="#111e22", color=NA)+
+  geom_richtext(data = tibble(
+      x = -780000, y = 3459296.1,
+      label = 
+      "<b style='color:#4c6750;font-size:60pt;'>Land use in Russia, 2018</b><br>
+      According to official statistics 65,8 % of lands covered by <b style='color:#328217;'>forests;</b><br> 22,3 % - <b style='color:#75aed7;'>agricultural lands</b>;
+      5,2 % - <b style='color:#5e3894;'>reserves</b>; 2,9 % - <b style='color:#f9bc06;'>lands of specially protected natural areas;</b><br> 1,6 % - <b style='color:#0d66a5;'>lands under water</b>; 1,2 % - <b style='color:#e23645;'>lands of settlements</b>; 1% - <b style='color:#111e22;'>industry lands</b>."
+    ),
+    aes(x, y, label = label),
+    inherit.aes = F,
+    family = "BigNoodleTitling",
+    size = 12,
+    color = "grey72",
+    fill = NA,
+    label.color = NA,
+    hjust = .5)+
+  theme_void()+
+ggsave(filename = "landuse hi res.png", 
+       device = "png",dpi = 500, units = "in",width = 39, height = 27)
+
+
+ggplot()+
+  geom_sf(data=regions, fill="grey72", color=NA)+
+  geom_sf(data=forest, fill="#328217", color=NA)+
+  geom_sf(data=agriculture,fill="#75aed7", color=NA)+
+  geom_sf(data = reserve, fill="#5e3894", color=NA)+
+  geom_sf(data=nature, fill="#f9bc06", color=NA)+
+  geom_sf(data=water, fill="#0d66a5", color=NA)+
+  geom_sf(data=towns, fill="#e23645", color=NA)+
+  geom_sf(data = industry, fill="#111e22", color=NA)+
+  geom_richtext(data = tibble(
+      x = -780000, y = 3459296.1,
+      label = 
+      "<b style='color:#4c6750;font-size:20pt;'>Land use in Russia, 2018</b><br>
+      According to official statistics 65,8 % of lands covered by <b style='color:#328217;'>forests;</b><br> 22,3 % - <b style='color:#75aed7;'>agricultural lands</b>;
+      5,2 % - <b style='color:#5e3894;'>reserves</b>; 2,9 % - <b style='color:#f9bc06;'>lands of specially protected natural areas;</b><br> 1,6 % - <b style='color:#0d66a5;'>lands under water</b>; 1,2 % - <b style='color:#e23645;'>lands of settlements</b>; 1% - <b style='color:#111e22;'>industry lands</b>."
+    ),
+    aes(x, y, label = label),
+    inherit.aes = F,
+    family = "BigNoodleTitling",
+    size = 4,
+    color = "grey72",
+    fill = NA,
+    label.color = NA,
+    hjust = .5)+
+  theme_void()+
+ggsave((paste0("day 18",".png")), 
+       device = "png",dpi = 500, width = 13, height = 9)
+```
+
+
+# Day 19 - NULL
+
+```{r}
+zero_km<-st_read("data\\zero_km.gpkg")
+
+ggplot()+
+  base_map(st_bbox(zero_km),increase_zoom = 2,basemap = "positron", nolabels = TRUE)+
+  geom_sf(data=zero_km, color="#088691", size=4)+
+  geom_curve(data = tibble(
+      x = 31, y = 57,
+      Xend=30.30086,Yend=59.93231), aes(x=x,y=y,xend=Xend, yend=Yend),
+             curvature = 0.2,lwd=0.7,color="#088691")+
+  geom_curve(data = tibble(
+      x = 36, y = 59,
+      Xend=37.61768,Yend=55.75584), aes(x=x,y=y,xend=Xend, yend=Yend),
+             curvature = 0.3,lwd=0.7,color="#088691")+
+  geom_text(data = tibble(
+    x=31.2,y=56.9, label="Kilometre zero in Russian Empire"
+  ), 
+      aes(x=x, y=y, label=label),
+      size=5, color="#088691",family="Caviar Dreams")+
+  geom_text(data = tibble(
+    x=36,y=59.1, label="Kilometre zero in Russian Federation"
+  ), 
+      aes(x=x, y=y, label=label),
+      size=5, color="#088691",family="Caviar Dreams")+
+  ggtitle(label = "Kilometre zero")+
+  theme_void()+
+  theme(plot.title = element_text(hjust = 0.5,vjust=0.1,size = 25, 
+                                  family = "Caviar Dreams",
+                                  face="bold",
+                                  colour = "#088691"))+
+  ggsave((paste0("day 19",".png")), 
+       device = "png",dpi = 500, width = 10, height = 10)
+  
+```
+
+
+# Day 20 - Population
+
+```{r}
+internet2000 <- readr::read_csv("data\\WORLD-ATLAS2.0_Percentage of individuals using the internet_[2000].csv") 
+internet2000$Country<-recode(internet2000$Country,"Russian Federation"="Russia")
+internet2000$Country<-recode(internet2000$Country,"Bolivia (Plurin. State of)"="Bolivia")
+internet2000$Country<-recode(internet2000$Country,"Dem. Rep. of the Congo"="Democratic Republic of the Congo")
+internet2000$Country<-recode(internet2000$Country,"Congo"="Republic of Congo")
+internet2000$Country<-recode(internet2000$Country,"United Rep. of Tanzania"="United Republic of Tanzania")
+internet2000$Country<-recode(internet2000$Country,"Iran (Islamic Republic of)"="Iran")
+internet2000$Country<-recode(internet2000$Country,"Venezuela (Boliv. Rep. of)"="Venezuela")
+internet2000$Country<-recode(internet2000$Country,"Czechia"="Czech Republic")
+
+internet2017 <- readr::read_csv("data\\WORLD-ATLAS2.0_Percentage of individuals using the internet_[2017].csv")
+internet2017$Country<-recode(internet2017$Country,"Russian Federation"="Russia")
+internet2017$Country<-recode(internet2017$Country,"Bolivia (Plurin. State of)"="Bolivia")
+internet2017$Country<-recode(internet2017$Country,"Dem. Rep. of the Congo"="Democratic Republic of the Congo")
+internet2017$Country<-recode(internet2017$Country,"Congo"="Republic of Congo")
+internet2017$Country<-recode(internet2017$Country,"United Rep. of Tanzania"="United Republic of Tanzania")
+internet2017$Country<-recode(internet2017$Country,"Iran (Islamic Republic of)"="Iran")
+internet2017$Country<-recode(internet2017$Country,"Venezuela (Boliv. Rep. of)"="Venezuela")
+internet2017$Country<-recode(internet2017$Country,"Czechia"="Czech Republic")
+
+countries<-ne_countries(type="countries", returnclass = "sf")
+
+internet2000<-left_join(countries,internet2000,by = c("admin" = "Country")) %>% 
+  st_transform("+proj=moll +lon_0=0 +x_0=0 +y_0=0 +datum=WGS84 +units=m +no_defs ") %>% 
+  drop_na(Value)
+equal.interval <- seq(min(internet2000$Value), 
+                     max(internet2000$Value), 
+                     by = (max(internet2000$Value)-min(internet2000$Value))/4)
+labels <- c() 
+for(idx in 1:length(equal.interval)){
+  labels <- c(labels, paste0(round(equal.interval[idx], 1), 
+                             " – ", 
+                             round(equal.interval[idx + 1], 1)))}
+labels <- labels[1:length(labels)-1]
+internet2000$value.equal <- cut(internet2000$Value, breaks=equal.interval, 
+                     labels=labels,include.lowest = TRUE)
+
+
+internet2017<-left_join(countries,internet2017,by = c("admin" = "Country")) %>% 
+  st_transform("+proj=moll +lon_0=0 +x_0=0 +y_0=0 +datum=WGS84 +units=m +no_defs ") %>% 
+  drop_na(Value)
+equal.interval <- seq(min(internet2017$Value), 
+                     max(internet2017$Value), 
+                     by = (max(internet2017$Value)-min(internet2017$Value))/4)
+labels <- c() 
+for(idx in 1:length(equal.interval)){
+  labels <- c(labels, paste0(round(equal.interval[idx], 1), 
+                             " – ", 
+                             round(equal.interval[idx + 1], 1)))}
+labels <- labels[1:length(labels)-1]
+internet2017$value.equal <- cut(internet2017$Value, breaks=equal.interval, 
+                     labels=labels,include.lowest = TRUE)
+
+int2000<-ggplot()+
+  geom_sf(data=internet2000, aes(fill=value.equal), color="#061147")+
+  scale_fill_brewer(palette = "YlGnBu", name=NULL, aesthetics = "fill")+
+  ggtitle(label = "Percentage of population using the internet, 2000")+
+  theme_void()+
+  theme(plot.title = element_text(hjust = 0.5,vjust=0.1,size = 20, 
+                                  family = "Caviar Dreams",
+                                  face="bold",
+                                  colour = "#088691"),
+        text = element_text(size = 10, family = "Caviar Dreams",
+                            face="bold",colour = "black"))
+
+int2017<-ggplot()+
+  geom_sf(data=internet2017, aes(fill=value.equal), color="#061147")+
+  scale_fill_brewer(palette = "YlGnBu", name=NULL, aesthetics = "fill")+
+  ggtitle(label = "Percentage of population using the internet, 2017")+
+  theme_void()+
+  theme(plot.title = element_text(hjust = 0.5,vjust=0.1,size = 20, 
+                                  family = "Caviar Dreams",
+                                  face="bold",
+                                  colour = "#088691"),
+        text = element_text(size = 10, family = "Caviar Dreams",
+                            face="bold",colour = "black"))
+
+int2000/int2017
+ggsave((paste0("day 20",".png")), 
+       device = "png",dpi = 500, width = 10, height = 10)
+
+```
+
+# Day 21 - Water
+
+```{r}
+bay<-st_read("data\\water.shp")
+rivers<-st_read("data\\rivers.gpkg")
+lighthouse<-st_read("data\\lighthouse.geojson")
+
+ggplot()+
+  geom_sf(data=bay, fill="#0b6d8e", color=NA)+
+  geom_sf(data=rivers, fill="#0b6d8e", color=NA)+
+  geom_sf(data=lighthouse, color="#f9e406", size=5, alpha=0.5)+
+  xlim(29.67,30.55)+ylim(59.85,60.05)+
+  ggtitle(label = "St Petersburg waters")+
+  theme_void()+
+  theme(plot.title = element_text(hjust = 0.5,vjust=0.1,size = 20, 
+                                  family = "Caviar Dreams",
+                                  face="bold",
+                                  colour = "#0b6d8e"))+
+  ggsave((paste0("day 21",".png")), 
+       device = "png",dpi = 500, width = 10, height = 5)
+
+
+```
+
+
+# Day 22 - Movement
+
+```{r}
+library(mapboxapi)
+library(snapbox)
+
+iso <- mb_isochrone(
+  location = c(30.315479,59.939229),
+  profile = "cycling",
+  time = 1:60)
+
+iso_dr <- mb_isochrone(
+  location = c(30.315479,59.939229),
+  profile = "driving",
+  time = 1:60)
+
+iso_w <- mb_isochrone(
+  location = c(30.315479,59.939229),
+  profile = "walking",
+  time = 1:60)
+
+area <- st_bbox(iso, crs=4326)
+
+driving<-ggplot()+
+  base_map(st_bbox(iso_dr), increase_zoom = 2,basemap = "positron", nolabels = TRUE) +
+  geom_sf(data=iso_dr, aes(fill=time),color=NA, alpha=0.9)+
+  scale_fill_viridis_c(alpha = 0.9, name="Time, minutes")+
+  ggtitle(label = "Drive-time to city center")+
+  theme_void()+
+  theme(plot.title = element_text(hjust = 0.5,vjust=0.1,size = 20, 
+                                  family = "Ostrich Sans",
+                                  face="bold",
+                                  colour = "#0a5c4e"),
+        text = element_text(size = 7, family = "Ostrich Sans",
+                            face="bold",colour = "black"),
+        legend.position = "bottom")
+
+cycling<-ggplot()+
+  base_map(st_bbox(iso_dr), increase_zoom = 2,basemap = "positron", nolabels = TRUE) +
+  geom_sf(data=iso, aes(fill=time), color=NA)+
+  scale_fill_viridis_c(alpha = 0.9, name="Time, minutes")+
+  ggtitle(label = "Cycling time to city center")+
+  theme_void()+
+  theme(plot.title = element_text(hjust = 0.5,vjust=0.1,size = 20, 
+                                  family = "Ostrich Sans",
+                                  face="bold",
+                                  colour = "#0a5c4e"),
+        text = element_text(size = 7, family = "Ostrich Sans",
+                            face="bold",colour = "black"),
+        legend.position = "bottom")
+
+walking<-ggplot()+
+  base_map(st_bbox(iso), increase_zoom = 2,basemap = "positron", nolabels = TRUE) +
+  geom_sf(data=iso, fill=NA, color=NA)+
+  geom_sf(data=iso_w, aes(fill=time), color=NA)+
+  scale_fill_viridis_c(alpha = 0.9, name="Time, minutes")+
+  ggtitle(label = "Walking time to city center")+
+  theme_void()+
+  theme(plot.title = element_text(hjust = 0.5,vjust=0.1,size = 20, 
+                                  family = "Ostrich Sans",
+                                  face="bold",
+                                  colour = "#0a5c4e"),
+        text = element_text(size = 7, family = "Ostrich Sans",
+                            face="bold",colour = "black"),
+        legend.position = "bottom")
+
+driving+cycling+walking
+ggsave((paste0("day 22",".png")), 
+       device = "png",dpi = 500, width = 14, height = 7)
+```
+
+
+# Day 23 - Boundaries
+
+```{r}
+library(ggdark)
+
+regions<-st_read("data\\russia regions.shp") %>% 
+  st_transform(crs = "+proj=aea +lat_1=50 +lat_2=70 +lat_0=56 +lon_0=100 +x_0=0 +y_0=0 +ellps=WGS84 +datum=WGS84 +units=m +no_defs") 
+
+rivers<-st_read("data\\rivers_boundary.gpkg")%>% 
+  st_transform(crs = "+proj=aea +lat_1=50 +lat_2=70 +lat_0=56 +lon_0=100 +x_0=0 +y_0=0 +ellps=WGS84 +datum=WGS84 +units=m +no_defs")
+
+ggplot()+
+  geom_sf(data = regions, fill="#0f290a", color="#94a9b8")+
+  geom_sf(data=rivers, color="#043dae", lwd=1.5)+
+  ggtitle(label = "National and regional borders with river borders")+
+  labs(caption = "data: Sarah J. Popelka, Laurence C. Smith; Rivers as political borders: a new subnational geospatial dataset. Water Policy 1 June 2020; 22 (3): 293–312. doi: https://doi.org/10.2166/wp.2020.041")+
+  dark_theme_void()+
+  theme(plot.title = element_text(hjust = 0.5,vjust=0.1,
+                                  family = "BigNoodleTitling",
+                                  size = 20, color ="#8fa2bc"),
+        text = element_text(size = 15, family = "BigNoodleTitling",
+                            colour = "#8fa2bc"))+
+  ggsave((paste0("day 23",".png")), 
+       device = "png",dpi = 500, width = 13, height = 8)
+
+```
+
+
+# Day 24 - Elevation
+
+```{r}
+elev_img<- raster::raster("data\\elbrus.tif")
+bottom_left = c(y=42.191648, x=43.125253)
+top_right   = c(y=42.750991, x=43.451930)
+
+extent_latlong = sp::SpatialPoints(rbind(bottom_left, top_right),
+                   proj4string=sp::CRS("+proj=longlat +ellps=WGS84 +datum=WGS84"))
+
+e = raster::extent(extent_latlong)
+
+elevation_cropped = raster::crop(elev_img, e)
+el_matrix = rayshader::raster_to_matrix(elevation_cropped)
+
+el_matrix %>%
+ sphere_shade(texture=create_texture("#c78605","#98a50d","#476b59","white","#5c4e0a"),zscale=10) %>%
+ add_shadow(ambient_shade(el_matrix, maxsearch = 100, multicore = TRUE,zscale=10),0) %>%
+ add_shadow(lamb_shade(el_matrix),0.9) %>%
+  plot_3d(el_matrix,asp = 1/cospi(42.5/180),
+          zscale = 10, windowsize = c(1200, 1000),phi=40, zoom=0.5,
+          baseshape = "circle",theta = 45)
+render_snapshot("day 24.png",title_text = "Mount Elbrus",title_bar_color = "white",
+               title_color = "#476b59", title_position = "north", title_size = 40)
+
+
+
+```
+
+
+# Day 25 - COVID-19
+
+```{r}
+library(SOmap)
+
+spiritedMedium <- colorRampPalette(c("#2a2659", "#1f4693", "#04a0ae",
+                                     "#036333","#73a659","#98a50d"))
+spirited <- spiritedMedium(80)
+
+p<-SOmap(trim = -40, bathy_legend = FALSE,graticules = TRUE)
+pg<-SOgg(p)
+pg
+ggsave((paste0("day 25",".png")), 
+       device = "png",dpi = 500, width = 10, height = 10)
+
+```
+
+
+# Day 26 - Map with a new tool
+
+Aerialod
+
+# Day 27 - Big or small data
+
+kepler.gl
+
+# Day 28 - Non-geographic map
+
+```{r}
+library(ggseg)
+
+ggplot()+
+  geom_brain(atlas=aseg, aes(fill=region))+
+  scale_fill_viridis_d(option = "cividis")+
+  ggtitle(label = "Brain map")+
+  theme_brain2()+
+  theme(legend.position = "none",
+        plot.title = element_text(hjust = 0.5,vjust=0.1,
+                                  family = "BigNoodleTitling",
+                                  size = 20, color ="#8fa2bc"))+
+  ggsave((paste0("day 28",".png")), 
+       device = "png",dpi = 500, width = 10, height = 5)
+```
+
+
+# Day 29 - Globe
+
+```{r}
+library(rayrender)
+
+generate_studio(curvature = 3) %>% 
+      add_object(sphere(x=-1,y=1.2,radius=0.7,angle=c(0,0,0),material = glossy(gloss=0.2,
+        image_texture = "BlackMarble_2016_01deg.png"))) %>%
+      add_object(sphere(x=1,y=1.2,radius=0.7,angle=c(0,90,0),material = glossy(gloss=0.2,
+        image_texture = "BlackMarble_2016_01deg.png"))) %>%
+      add_object(sphere(x=-1,y=-0.2,radius=0.7,angle=c(0,180,0),material = glossy(gloss=0.2,
+        image_texture = "BlackMarble_2016_01deg.png"))) %>%
+      add_object(sphere(x=1,y=-0.2,radius=0.7,angle=c(0,270,0),material = glossy(gloss=0.2,
+        image_texture = "BlackMarble_2016_01deg.png"))) %>%
+      add_object(sphere(y=5,z=5,radius=2,material=light(intensity =10))) %>% 
+      render_scene(width=1200,height=1200,aperture=0, fov=25,sample_method = "stratified", 
+                   samples=100, clamp_value=10, lookfrom=c(0,1,10), 
+                   filename="day 29.png")
+```
+
+
+# Day 30 - A map
+
+```{r}
+library(ggridges)
+library(ggdark)
+
+elbrus<-read.csv("data\\ridgeline.csv", header = TRUE,sep = ",")
+
+names(elbrus)[2] <- "Elev"
+names(elbrus)[6] <- "Lon"
+names(elbrus)[7] <- "Lat"
+
+# plot the transects with ggplot2 & ggridges
+ggplot(elbrus, aes(x = Lon, y = Lat, group =Lat, height = Elev)) +
+                  geom_density_ridges(stat = "identity", scale = 8,
+                                      fill="black", color = "white", lwd=2)+
+  xlim(270000,330000)+
+    ggtitle(label = "MOUNT ELBRUS")+
+  dark_theme_void()+
+  theme(plot.title = element_text(hjust = 0.5,vjust=0.9,
+                                  size = 110, color ="white"))+
+  ggsave((paste0("day 30",".png")), 
+       device = "png",dpi = 500, width = 10, height = 10)
+  
+#hi-res version 
+ggplot(elbrus, aes(x = Lon, y = Lat, group =Lat, height = Elev)) +
+                  geom_density_ridges(stat = "identity", scale = 8,
+                                      fill="black", color = "white", lwd=2)+
+  xlim(270000,330000)+
+    ggtitle(label = "MOUNT ELBRUS")+
+  dark_theme_void()+
+  theme(plot.title = element_text(hjust = 0.5,vjust=0.9,
+                                  size = 110, color ="white"))+
+  ggsave(filename = "ridgeline_elbrus.png",
+       width = 36, 
+       height = 36, 
+       units = "in",
+       dpi = 500)
+
+
+  
+
+
+```
+
